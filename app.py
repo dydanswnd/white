@@ -7,6 +7,10 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("DATABASE_PATH") or os.path.join(BASE_DIR, "memo.db")
 PRODUCTION = os.environ.get("PRODUCTION") == "1"
+# 관리자 아이디. 비워두면 아무도 관리자가 아니다(기본값).
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "")
+# 관리자만 볼 수 있는 플래그. 실제 값은 .env(또는 배포 환경변수)에서 주입한다.
+FLAG = os.environ.get("FLAG", "FLAG{set_the_FLAG_env_var}")
 
 app = Flask(__name__)
 
@@ -26,6 +30,15 @@ app.config.update(
     SESSION_COOKIE_SECURE=PRODUCTION,
     MAX_CONTENT_LENGTH=64 * 1024,
 )
+
+
+def is_admin():
+    return bool(ADMIN_USERNAME) and session.get("username") == ADMIN_USERNAME
+
+
+@app.context_processor
+def inject_admin():
+    return {"is_admin": is_admin()}
 
 
 def get_db():
@@ -429,6 +442,51 @@ BASE_TEMPLATE = """
 
   .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; filter: none; }
 
+  /* ---------- 관리자 ---------- */
+  .card-admin { max-width: 640px; }
+
+  .flag-box {
+    margin: 4px 0 26px; padding: 18px 20px; border-radius: 14px;
+    background: rgba(124,92,255,.1);
+    border: 1px solid rgba(124,92,255,.42);
+  }
+  .flag-box b {
+    display: block; margin-bottom: 9px;
+    font-size: 11.5px; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .flag-box code {
+    display: block; font-size: 16px; font-weight: 700;
+    letter-spacing: .01em; color: #cbbcff;
+  }
+  .flag-box .desc { display: block; margin-top: 10px; font-size: 12.5px; color: var(--faint); }
+
+  .table-wrap { overflow-x: auto; margin-bottom: 8px; }
+
+  .flags {
+    width: 100%; table-layout: fixed;
+    border-collapse: collapse; text-align: left; font-size: 13.5px;
+  }
+  .flags th {
+    padding: 0 12px 10px; font-size: 11.5px; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--faint);
+  }
+  .flags th:first-child, .flags td:first-child { width: 40%; }
+  .flags td { padding: 12px; border-top: 1px solid var(--line); vertical-align: top; }
+  .flags .desc { display: block; margin-top: 5px; font-size: 12.5px; color: var(--faint); }
+
+  code {
+    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+    font-size: 12.5px; color: #cbbcff; word-break: break-all;
+  }
+
+  .tag {
+    display: inline-block; margin-left: 7px; padding: 3px 10px; border-radius: 999px;
+    font-size: 11px; font-weight: 700; white-space: nowrap; vertical-align: 2px;
+  }
+  .tag-ok   { background: rgba(34,211,238,.12); border: 1px solid rgba(34,211,238,.3); color: #7ee7fb; }
+  .tag-warn { background: rgba(255,176,86,.12); border: 1px solid rgba(255,176,86,.32); color: #ffcb8b; }
+
   .hero-pets { display: flex; gap: 14px; justify-content: center; margin-bottom: 26px; font-size: 40px; }
   .hero-pets span { animation: idle 2.6s ease-in-out infinite; }
   .hero-pets span:nth-child(2) { animation-delay: .35s; }
@@ -528,6 +586,9 @@ BASE_TEMPLATE = """
           <span class="avatar">{{ session['username'][0]|upper }}</span>
           <b>{{ session['username'] }}</b>
         </span>
+        {% if is_admin %}
+          <a class="nav-link" href="{{ url_for('admin') }}">관리자</a>
+        {% endif %}
         <a class="nav-link" href="{{ url_for('logout') }}">로그아웃</a>
       {% else %}
         <a class="nav-link" href="{{ url_for('login') }}">로그인</a>
@@ -703,8 +764,61 @@ LOGIN_BODY = (
 )
 
 
-def render(body_template, error=None, title="메모"):
-    body = render_template_string(body_template, error=error)
+ADMIN_BODY = """
+<div class="card card-admin">
+  <span class="eyebrow"><span class="dot"></span> Admin only</span>
+  <h1>관리자 전용</h1>
+  <p class="sub">이 페이지는 관리자 계정으로 로그인해야만 열립니다.</p>
+
+  <div class="flag-box">
+    <b>Flag</b>
+    <code>{{ flag }}</code>
+    <span class="desc">관리자가 아닌 사용자는 이 값을 볼 수 없습니다.</span>
+  </div>
+
+  <h2 class="sub" style="margin-bottom:14px">서버 보안 설정</h2>
+
+  <div class="table-wrap">
+    <table class="flags">
+      <thead>
+        <tr><th>항목</th><th>현재 값</th></tr>
+      </thead>
+      <tbody>
+        {% for f in flags %}
+        <tr>
+          <td><code>{{ f.name }}</code></td>
+          <td>
+            <code>{{ f.value }}</code>
+            <span class="tag {{ 'tag-ok' if f.ok else 'tag-warn' }}">{{ '정상' if f.ok else '확인 필요' }}</span>
+            <span class="desc">{{ f.desc }}</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <b>브라우저가 실제로 받는 헤더</b>
+    <code>Set-Cookie: session=...; {{ cookie_header }}</code>
+  </div>
+
+  <a class="btn-ghost" href="{{ url_for('index') }}">홈으로</a>
+</div>
+"""
+
+FORBIDDEN_BODY = """
+<div class="card welcome">
+  <div class="avatar-lg">🔒</div>
+  <h1>접근 권한이 없습니다</h1>
+  <p class="sub">이 페이지는 관리자만 볼 수 있습니다.</p>
+  <a class="btn-ghost" href="{{ url_for('index') }}">홈으로</a>
+</div>
+"""
+
+
+def render(body_template, error=None, title="메모", **ctx):
+    body = render_template_string(body_template, error=error, **ctx)
     return render_template_string(BASE_TEMPLATE, body=body, title=title)
 
 
@@ -759,6 +873,94 @@ def login():
         return redirect(url_for("index"))
 
     return render(LOGIN_BODY, title="로그인")
+
+
+@app.route("/admin")
+def admin():
+    if not session.get("username"):
+        return redirect(url_for("login"))
+
+    if not is_admin():
+        return render(FORBIDDEN_BODY, title="접근 불가"), 403
+
+    secure = app.config["SESSION_COOKIE_SECURE"]
+    samesite = app.config["SESSION_COOKIE_SAMESITE"]
+    httponly = app.config["SESSION_COOKIE_HTTPONLY"]
+    from_env = bool(os.environ.get("SECRET_KEY"))
+
+    flags = [
+        {
+            "name": "PRODUCTION",
+            "value": "1 (배포)" if PRODUCTION else "미설정 (개발)",
+            "desc": "나머지 보안 설정의 기준이 되는 값",
+            "ok": True,
+        },
+        {
+            "name": "SESSION_COOKIE_SECURE",
+            "value": str(secure),
+            "desc": "켜지면 HTTPS 연결에서만 세션 쿠키를 보냅니다.",
+            "ok": secure == PRODUCTION,
+        },
+        {
+            "name": "SESSION_COOKIE_HTTPONLY",
+            "value": str(httponly),
+            "desc": "자바스크립트가 쿠키를 읽지 못하게 막습니다 (XSS 방어).",
+            "ok": httponly,
+        },
+        {
+            "name": "SESSION_COOKIE_SAMESITE",
+            "value": str(samesite),
+            "desc": "다른 사이트에서 넘어온 요청에는 쿠키를 싣지 않습니다 (CSRF 방어).",
+            "ok": samesite in ("Lax", "Strict"),
+        },
+        {
+            "name": "DEBUG",
+            "value": str(app.debug),
+            "desc": "배포 환경에서 켜져 있으면 원격 코드 실행이 가능해집니다.",
+            "ok": not (PRODUCTION and app.debug),
+        },
+        {
+            "name": "SECRET_KEY",
+            "value": "환경변수에서 로드됨" if from_env else "개발용 기본값",
+            "desc": "세션 서명에 쓰는 키입니다. 값 자체는 표시하지 않습니다.",
+            "ok": from_env,
+        },
+        {
+            "name": "MAX_CONTENT_LENGTH",
+            "value": f"{app.config['MAX_CONTENT_LENGTH'] // 1024} KB",
+            "desc": "이보다 큰 요청 본문은 거부합니다.",
+            "ok": True,
+        },
+        {
+            "name": "DATABASE_PATH",
+            "value": DB_PATH,
+            "desc": "회원 정보가 저장되는 SQLite 파일 위치",
+            "ok": True,
+        },
+        {
+            "name": "request.scheme",
+            "value": request.scheme,
+            "desc": "지금 이 페이지를 연 실제 프로토콜",
+            "ok": request.scheme == "https" or not PRODUCTION,
+        },
+    ]
+
+    parts = []
+    if secure:
+        parts.append("Secure")
+    if httponly:
+        parts.append("HttpOnly")
+    parts.append("Path=/")
+    if samesite:
+        parts.append(f"SameSite={samesite}")
+
+    return render(
+        ADMIN_BODY,
+        title="관리자",
+        flag=FLAG,
+        flags=flags,
+        cookie_header="; ".join(parts),
+    )
 
 
 @app.route("/logout")
