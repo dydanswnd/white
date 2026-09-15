@@ -11,6 +11,9 @@ PRODUCTION = os.environ.get("PRODUCTION") == "1"
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "")
 # 관리자만 볼 수 있는 플래그. 실제 값은 .env(또는 배포 환경변수)에서 주입한다.
 FLAG = os.environ.get("FLAG", "FLAG{set_the_FLAG_env_var}")
+# 메모 입력 길이 제한
+TITLE_MAX = 100
+CONTENT_MAX = 5000
 
 app = Flask(__name__)
 
@@ -34,6 +37,26 @@ app.config.update(
 
 def is_admin():
     return bool(ADMIN_USERNAME) and session.get("username") == ADMIN_USERNAME
+
+
+def current_user_id():
+    """로그인한 사용자의 id. 로그인 상태가 아니면 None."""
+    username = session.get("username")
+    if not username:
+        return None
+    row = get_db().execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+    return row["id"] if row else None
+
+
+def validate_memo(title, content):
+    """문제가 있으면 오류 메시지를, 없으면 None을 돌려준다."""
+    if not title:
+        return "제목을 입력해주세요."
+    if len(title) > TITLE_MAX:
+        return "제목은 %d자 이하로 입력해주세요." % TITLE_MAX
+    if len(content) > CONTENT_MAX:
+        return "내용은 %d자 이하로 입력해주세요." % CONTENT_MAX
+    return None
 
 
 @app.context_processor
@@ -66,6 +89,20 @@ def init_db():
             )
             """
         )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+            """
+        )
+        db.execute("CREATE INDEX IF NOT EXISTS idx_memos_user ON memos(user_id)")
         db.commit()
 
 
@@ -399,6 +436,87 @@ BASE_TEMPLATE = """
 
   .btn:disabled { background: #c9cbd0; cursor: not-allowed; }
 
+  /* ---------- 메모 ---------- */
+  .card-memo { max-width: 680px; }
+
+  .memo-head {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 14px; margin-bottom: 22px;
+  }
+  .memo-head h1 { margin: 0 0 4px; }
+  .memo-head .sub { margin: 0; }
+  .btn-new {
+    flex: none; padding: 11px 18px; border-radius: 6px;
+    font-size: 14px; font-weight: 700; color: #fff; text-decoration: none;
+    background: var(--green); white-space: nowrap;
+    transition: background .15s;
+  }
+  .btn-new:hover { background: var(--green-dark); }
+
+  .memo-list { list-style: none; margin: 0; padding: 0; }
+
+  .memo-item {
+    display: flex; align-items: flex-start; gap: 14px;
+    padding: 16px 2px; border-top: 1px solid var(--line);
+  }
+  .memo-item:last-child { border-bottom: 1px solid var(--line); }
+
+  .memo-body { flex: 1; min-width: 0; }
+  .memo-title {
+    display: block; margin-bottom: 5px;
+    font-size: 15.5px; font-weight: 700; color: var(--text); text-decoration: none;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .memo-title:hover { color: var(--green-deep); text-decoration: underline; }
+  .memo-preview {
+    margin: 0 0 7px; font-size: 13.5px; line-height: 1.5; color: var(--muted);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; word-break: break-all;
+  }
+  .memo-meta { font-size: 12px; color: var(--faint); }
+
+  .memo-actions { flex: none; display: flex; gap: 6px; }
+  .btn-sm {
+    padding: 7px 12px; border-radius: 5px; cursor: pointer;
+    font-family: inherit; font-size: 12.5px; font-weight: 700;
+    color: var(--muted); text-decoration: none; white-space: nowrap;
+    background: #fff; border: 1px solid var(--line-strong);
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .btn-sm:hover { background: #f7f8f9; border-color: #bcbcc4; color: var(--text); }
+  .btn-danger:hover { background: #fff4f4; border-color: #e8a5a5; color: #d63b3b; }
+
+  .memo-actions form { margin: 0; display: inline; }
+
+  .empty {
+    padding: 52px 20px; text-align: center;
+    border: 1px dashed var(--line-strong); border-radius: 8px;
+    background: #fbfbfc;
+  }
+  .empty .emoji { display: block; margin-bottom: 12px; font-size: 38px; }
+  .empty p { margin: 0 0 18px; font-size: 14px; color: var(--muted); }
+
+  textarea {
+    width: 100%; min-height: 240px; padding: 13px 14px; resize: vertical;
+    font-family: inherit; font-size: 15px; line-height: 1.65; color: var(--text);
+    background: #fff;
+    border: 1px solid var(--line-strong); border-radius: 4px;
+    outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  textarea::placeholder { color: #b5b5bc; }
+  textarea:focus {
+    border-color: var(--green);
+    box-shadow: 0 0 0 2px rgba(3,199,90,.15);
+  }
+
+  .counter { margin: 6px 1px 0; font-size: 12px; color: var(--faint); text-align: right; }
+
+  .memo-view {
+    white-space: pre-wrap; word-break: break-word;
+    margin: 0 0 24px; font-size: 15px; line-height: 1.75; color: var(--text);
+  }
+
   /* ---------- 관리자 ---------- */
   .card-admin { max-width: 640px; }
 
@@ -508,7 +626,9 @@ BASE_TEMPLATE = """
     .brand { font-size: 17px; gap: 7px; }
     .nav-link { padding: 8px 8px; }
     .nav-cta { padding: 8px 12px; }
-    .chip { padding: 3px 9px 3px 3px; font-size: 13px; }
+    /* 좁은 화면에서는 메뉴가 넘치므로 아이디 칩을 숨긴다 */
+    .chip { display: none; }
+    .nav-link { font-size: 13.5px; }
     main { padding: 24px 16px 56px; }
     .card { padding: 28px 22px; }
   }
@@ -540,6 +660,7 @@ BASE_TEMPLATE = """
           <span class="avatar">{{ session['username'][0]|upper }}</span>
           <b>{{ session['username'] }}</b>
         </span>
+        <a class="nav-link" href="{{ url_for('memos') }}">내 메모</a>
         {% if is_admin %}
           <a class="nav-link" href="{{ url_for('admin') }}">관리자</a>
         {% endif %}
@@ -590,6 +711,7 @@ INDEX_BODY = """
   </div>
 
   <button class="btn" type="button" id="go">이리 와! 🏃</button>
+  <a class="btn-ghost" href="{{ url_for('memos') }}">📝 내 메모 쓰러 가기</a>
   <a class="btn-ghost" href="{{ url_for('logout') }}">로그아웃</a>
 </div>
 
@@ -718,6 +840,101 @@ LOGIN_BODY = (
 )
 
 
+MEMO_LIST_BODY = """
+<div class="card card-memo">
+  <div class="memo-head">
+    <div>
+      <h1>내 메모</h1>
+      <p class="sub">{{ session['username'] }}님이 쓴 메모 {{ memos|length }}개</p>
+    </div>
+    <a class="btn-new" href="{{ url_for('memo_new') }}">+ 새 메모</a>
+  </div>
+
+  {% if memos %}
+  <ul class="memo-list">
+    {% for m in memos %}
+    <li class="memo-item">
+      <div class="memo-body">
+        <a class="memo-title" href="{{ url_for('memo_detail', memo_id=m.id) }}">{{ m.title }}</a>
+        {% if m.content %}<p class="memo-preview">{{ m.content }}</p>{% endif %}
+        <span class="memo-meta">{{ m.updated_at }}</span>
+      </div>
+      <div class="memo-actions">
+        <a class="btn-sm" href="{{ url_for('memo_edit', memo_id=m.id) }}">수정</a>
+        <form method="post" action="{{ url_for('memo_delete', memo_id=m.id) }}"
+              onsubmit="return confirm('이 메모를 삭제할까요?');">
+          <button class="btn-sm btn-danger" type="submit">삭제</button>
+        </form>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty">
+    <span class="emoji">📝</span>
+    <p>아직 쓴 메모가 없습니다.</p>
+    <a class="btn-new" href="{{ url_for('memo_new') }}">첫 메모 쓰기</a>
+  </div>
+  {% endif %}
+
+  <a class="btn-ghost" href="{{ url_for('index') }}">홈으로</a>
+</div>
+"""
+
+MEMO_DETAIL_BODY = """
+<div class="card card-memo">
+  <h1>{{ memo.title }}</h1>
+  <p class="sub">{{ memo.created_at }} 작성 · {{ memo.updated_at }} 수정</p>
+
+  <p class="memo-view">{{ memo.content }}</p>
+
+  <div class="memo-actions" style="margin-bottom:12px">
+    <a class="btn-sm" href="{{ url_for('memo_edit', memo_id=memo.id) }}">수정</a>
+    <form method="post" action="{{ url_for('memo_delete', memo_id=memo.id) }}"
+          onsubmit="return confirm('이 메모를 삭제할까요?');">
+      <button class="btn-sm btn-danger" type="submit">삭제</button>
+    </form>
+  </div>
+
+  <a class="btn-ghost" href="{{ url_for('memos') }}">목록으로</a>
+</div>
+"""
+
+MEMO_FORM_BODY = (
+    """
+<div class="card card-memo">
+  <span class="eyebrow"><span class="dot"></span> {{ 'Edit memo' if memo else 'New memo' }}</span>
+  <h1>{{ '메모 수정' if memo else '새 메모' }}</h1>
+  <p class="sub">제목은 """
+    + str(TITLE_MAX)
+    + """자, 내용은 """
+    + str(CONTENT_MAX)
+    + """자까지 쓸 수 있어요.</p>
+"""
+    + ALERT
+    + """
+  <form method="post">
+    <div class="field">
+      <label for="title">제목</label>
+      <input id="title" name="title" type="text" placeholder="제목을 입력하세요"
+             maxlength=\""""
+    + str(TITLE_MAX)
+    + """\" value="{{ form_title }}" autofocus>
+    </div>
+    <div class="field">
+      <label for="content">내용</label>
+      <textarea id="content" name="content" placeholder="내용을 입력하세요"
+                maxlength=\""""
+    + str(CONTENT_MAX)
+    + """\">{{ form_content }}</textarea>
+    </div>
+    <button class="btn" type="submit">{{ '수정하기' if memo else '저장하기' }}</button>
+  </form>
+  <a class="btn-ghost" href="{{ url_for('memos') }}">취소</a>
+</div>
+"""
+)
+
 ADMIN_BODY = """
 <div class="card card-admin">
   <span class="eyebrow"><span class="dot"></span> Admin only</span>
@@ -767,6 +984,15 @@ FORBIDDEN_BODY = """
   <h1>접근 권한이 없습니다</h1>
   <p class="sub">이 페이지는 관리자만 볼 수 있습니다.</p>
   <a class="btn-ghost" href="{{ url_for('index') }}">홈으로</a>
+</div>
+"""
+
+NOT_FOUND_BODY = """
+<div class="card welcome">
+  <div class="avatar-lg">🔍</div>
+  <h1>메모를 찾을 수 없습니다</h1>
+  <p class="sub">삭제되었거나, 내 메모가 아닙니다.</p>
+  <a class="btn-ghost" href="{{ url_for('memos') }}">내 메모로</a>
 </div>
 """
 
@@ -827,6 +1053,121 @@ def login():
         return redirect(url_for("index"))
 
     return render(LOGIN_BODY, title="로그인")
+
+
+def owned_memo(memo_id, user_id):
+    """내 메모일 때만 돌려준다. 남의 메모는 없는 것처럼 취급한다."""
+    return (
+        get_db()
+        .execute("SELECT * FROM memos WHERE id = ? AND user_id = ?", (memo_id, user_id))
+        .fetchone()
+    )
+
+
+@app.route("/memos")
+def memos():
+    user_id = current_user_id()
+    if user_id is None:
+        return redirect(url_for("login"))
+
+    rows = get_db().execute(
+        "SELECT * FROM memos WHERE user_id = ? ORDER BY updated_at DESC, id DESC",
+        (user_id,),
+    ).fetchall()
+
+    return render(MEMO_LIST_BODY, title="내 메모", memos=rows)
+
+
+@app.route("/memos/new", methods=["GET", "POST"])
+def memo_new():
+    user_id = current_user_id()
+    if user_id is None:
+        return redirect(url_for("login"))
+
+    title = ""
+    content = ""
+
+    if request.method == "POST":
+        title = request.form.get("title", "").strip()
+        content = request.form.get("content", "").strip()
+
+        error = validate_memo(title, content)
+        if error:
+            return render(
+                MEMO_FORM_BODY, error=error, title="새 메모",
+                memo=None, form_title=title, form_content=content,
+            )
+
+        db = get_db()
+        db.execute(
+            "INSERT INTO memos (user_id, title, content) VALUES (?, ?, ?)",
+            (user_id, title, content),
+        )
+        db.commit()
+        return redirect(url_for("memos"))
+
+    return render(MEMO_FORM_BODY, title="새 메모", memo=None, form_title=title, form_content=content)
+
+
+@app.route("/memos/<int:memo_id>")
+def memo_detail(memo_id):
+    user_id = current_user_id()
+    if user_id is None:
+        return redirect(url_for("login"))
+
+    memo = owned_memo(memo_id, user_id)
+    if memo is None:
+        return render(NOT_FOUND_BODY, title="메모 없음"), 404
+
+    return render(MEMO_DETAIL_BODY, title=memo["title"], memo=memo)
+
+
+@app.route("/memos/<int:memo_id>/edit", methods=["GET", "POST"])
+def memo_edit(memo_id):
+    user_id = current_user_id()
+    if user_id is None:
+        return redirect(url_for("login"))
+
+    memo = owned_memo(memo_id, user_id)
+    if memo is None:
+        return render(NOT_FOUND_BODY, title="메모 없음"), 404
+
+    if request.method == "POST":
+        title = request.form.get("title", "").strip()
+        content = request.form.get("content", "").strip()
+
+        error = validate_memo(title, content)
+        if error:
+            return render(
+                MEMO_FORM_BODY, error=error, title="메모 수정",
+                memo=memo, form_title=title, form_content=content,
+            )
+
+        db = get_db()
+        db.execute(
+            "UPDATE memos SET title = ?, content = ?, updated_at = datetime('now', 'localtime') "
+            "WHERE id = ? AND user_id = ?",
+            (title, content, memo_id, user_id),
+        )
+        db.commit()
+        return redirect(url_for("memo_detail", memo_id=memo_id))
+
+    return render(
+        MEMO_FORM_BODY, title="메모 수정",
+        memo=memo, form_title=memo["title"], form_content=memo["content"],
+    )
+
+
+@app.route("/memos/<int:memo_id>/delete", methods=["POST"])
+def memo_delete(memo_id):
+    user_id = current_user_id()
+    if user_id is None:
+        return redirect(url_for("login"))
+
+    db = get_db()
+    db.execute("DELETE FROM memos WHERE id = ? AND user_id = ?", (memo_id, user_id))
+    db.commit()
+    return redirect(url_for("memos"))
 
 
 @app.route("/admin")
