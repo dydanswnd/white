@@ -5,10 +5,27 @@ from flask import Flask, g, redirect, render_template_string, request, session, 
 from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "memo.db")
+DB_PATH = os.environ.get("DATABASE_PATH") or os.path.join(BASE_DIR, "memo.db")
+PRODUCTION = os.environ.get("PRODUCTION") == "1"
 
 app = Flask(__name__)
-app.secret_key = "dev-secret-key-change-me"
+
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    if PRODUCTION:
+        raise RuntimeError(
+            "SECRET_KEY 환경변수가 없습니다. 배포 환경에서는 반드시 설정해야 합니다.\n"
+            '생성 방법: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    SECRET_KEY = "dev-only-insecure-key"
+
+app.secret_key = SECRET_KEY
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=PRODUCTION,
+    MAX_CONTENT_LENGTH=64 * 1024,
+)
 
 
 def get_db():
@@ -37,6 +54,10 @@ def init_db():
             """
         )
         db.commit()
+
+
+# WSGI 서버(waitress/gunicorn)로 띄우면 __main__ 블록이 실행되지 않으므로 여기서 호출한다.
+init_db()
 
 
 BASE_TEMPLATE = """
@@ -317,6 +338,102 @@ BASE_TEMPLATE = """
   }
   .note b { display: block; margin-bottom: 4px; color: var(--text); font-weight: 650; }
 
+  /* ---------- 달려오는 무대 ---------- */
+  .card-wide { max-width: 560px; }
+
+  .stage {
+    position: relative; height: 320px; margin: 4px 0 22px;
+    border-radius: 20px; overflow: hidden;
+    border: 1px solid var(--line);
+    background: linear-gradient(180deg, #0d0a24 0%, #1a1046 46%, #2c1663 100%);
+  }
+  .stage::after {
+    content: ''; position: absolute; left: 0; right: 0; top: 45%; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(190,140,255,.95), transparent);
+    box-shadow: 0 0 42px 12px rgba(124,92,255,.32);
+  }
+
+  .ground {
+    position: absolute; left: -60%; right: -60%; bottom: -14%; height: 58%;
+    transform: perspective(250px) rotateX(59deg);
+    transform-origin: 50% 0%;
+    background:
+      repeating-linear-gradient(0deg, rgba(255,255,255,.07) 0 7px, transparent 7px 64px),
+      linear-gradient(180deg, #2c1663, #09061a);
+  }
+  .stage.running .ground { animation: road var(--step, .42s) linear infinite; }
+
+  .speedlines {
+    position: absolute; inset: -35%; opacity: 0;
+    background: repeating-conic-gradient(from 0deg at 50% 50%,
+      rgba(255,255,255,.13) 0deg .7deg, transparent .7deg 7deg);
+    -webkit-mask-image: radial-gradient(circle at 50% 50%, transparent 16%, #000 62%);
+    mask-image: radial-gradient(circle at 50% 50%, transparent 16%, #000 62%);
+  }
+  .stage.running .speedlines { animation: zoom-lines var(--dur, 1.5s) linear; }
+
+  .runner {
+    position: absolute; left: 50%; top: 46%;
+    font-size: 92px; line-height: 1;
+    transform: translate(-50%, -50%) scale(.5);
+    filter: drop-shadow(0 18px 26px rgba(0,0,0,.6));
+    transition: transform .4s ease;
+    will-change: transform;
+  }
+  .stage.running .runner {
+    animation: approach var(--dur, 1.5s) cubic-bezier(.5, 0, .9, .42) forwards;
+  }
+
+  .runner-inner { display: inline-block; animation: idle 2.6s ease-in-out infinite; }
+  .stage.running .runner-inner { animation: bob var(--step, .42s) ease-in-out infinite; }
+
+  .bubble {
+    position: absolute; left: 50%; bottom: 18px;
+    padding: 11px 22px; border-radius: 999px;
+    background: rgba(255,255,255,.96); color: #17142b;
+    font-size: 15px; font-weight: 750; white-space: nowrap;
+    opacity: 0; pointer-events: none;
+    transform: translateX(-50%) scale(.75);
+    box-shadow: 0 16px 34px -10px rgba(0,0,0,.75);
+    transition: opacity .2s, transform .3s cubic-bezier(.2, 1.6, .4, 1);
+  }
+  .stage.arrived { animation: bump .5s cubic-bezier(.36, .07, .19, .97); }
+  .stage.arrived .bubble { opacity: 1; transform: translateX(-50%) scale(1); }
+
+  .hint {
+    position: absolute; left: 0; right: 0; bottom: 16px;
+    text-align: center; font-size: 13px; color: rgba(255,255,255,.42);
+    transition: opacity .2s;
+  }
+  .stage.running .hint, .stage.arrived .hint { opacity: 0; }
+
+  .picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+
+  .pick {
+    display: flex; flex-direction: column; align-items: center; gap: 7px;
+    padding: 15px 8px; cursor: pointer;
+    font-family: inherit; font-size: 13px; font-weight: 650; color: var(--muted);
+    background: rgba(255,255,255,.035);
+    border: 1px solid var(--line); border-radius: 17px;
+    transition: color .18s, background .18s, border-color .18s, box-shadow .18s;
+  }
+  .pick em { font-style: normal; font-size: 29px; line-height: 1; transition: transform .2s; }
+  .pick:hover { color: var(--text); background: rgba(255,255,255,.075); }
+  .pick:hover em { transform: scale(1.18) rotate(-6deg); }
+  .pick.active {
+    color: #fff;
+    background: rgba(124,92,255,.17);
+    border-color: rgba(124,92,255,.72);
+    box-shadow: 0 0 0 3px rgba(124,92,255,.13);
+  }
+
+  .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; filter: none; }
+
+  .hero-pets { display: flex; gap: 14px; justify-content: center; margin-bottom: 26px; font-size: 40px; }
+  .hero-pets span { animation: idle 2.6s ease-in-out infinite; }
+  .hero-pets span:nth-child(2) { animation-delay: .35s; }
+  .hero-pets span:nth-child(3) { animation-delay: .7s; }
+
   /* ---------- 애니메이션 ---------- */
   @keyframes rise {
     from { opacity: 0; transform: translateY(18px) scale(.985); }
@@ -340,9 +457,43 @@ BASE_TEMPLATE = """
   @keyframes drift-c {
     to { transform: translate(90px, -110px) scale(1.1); }
   }
+  @keyframes road {
+    to { background-position: 0 64px, 0 0; }
+  }
+  @keyframes zoom-lines {
+    0%   { opacity: 0; transform: scale(.35); }
+    30%  { opacity: .9; }
+    100% { opacity: 0; transform: scale(2.8); }
+  }
+  @keyframes approach {
+    0%   { transform: translate(-50%, -50%) scale(.42); }
+    100% { transform: translate(-50%, -8%) scale(4.6); }
+  }
+  @keyframes idle {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-9%); }
+  }
+  @keyframes bob {
+    0%, 100% { transform: translateY(0) rotate(-6deg); }
+    50%      { transform: translateY(-14%) rotate(6deg); }
+  }
+  @keyframes bump {
+    0%, 100% { transform: translate(0, 0); }
+    15% { transform: translate(-9px, 5px); }
+    30% { transform: translate(8px, -6px); }
+    45% { transform: translate(-7px, 4px); }
+    60% { transform: translate(5px, -3px); }
+    80% { transform: translate(-3px, 1px); }
+  }
 
+  /* 장식용 움직임만 끈다. 달려오는 연출은 이 페이지의 본체라 남긴다. */
   @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .blob, .grid, .dot, .card, .hero,
+    .alert, .runner-inner, .hero-pets span,
+    .stage.arrived, .stage.running .ground, .stage.running .speedlines {
+      animation: none !important;
+    }
+    .speedlines { display: none; }
   }
 
   @media (max-width: 520px) {
@@ -404,23 +555,86 @@ ALERT = """
 
 INDEX_BODY = """
 {% if session.get('username') %}
-<div class="card welcome">
-  <div class="avatar-lg">{{ session['username'][0]|upper }}</div>
-  <h1>안녕하세요, {{ session['username'] }}님</h1>
-  <p class="sub">오늘도 좋은 기록 남겨보세요.</p>
-  <div class="status"><span class="dot"></span> 로그인 상태 유지 중</div>
-  <div class="note">
-    <b>메모 기능은 준비 중이에요</b>
-    지금은 회원가입 · 로그인 · 로그아웃까지 동작합니다.
+<div class="card card-wide welcome">
+  <span class="eyebrow"><span class="dot"></span> Who is coming</span>
+  <h1>누가 달려올까?</h1>
+  <p class="sub">{{ session['username'] }}님, 친구를 고르고 버튼을 눌러보세요.</p>
+
+  <div class="stage" id="stage">
+    <div class="ground"></div>
+    <div class="speedlines"></div>
+    <div class="runner"><span class="runner-inner" id="face">🐶</span></div>
+    <div class="bubble" id="bubble"></div>
+    <div class="hint">저 멀리서 달려옵니다</div>
   </div>
+
+  <div class="picker" id="picker">
+    <button class="pick active" type="button" data-key="dog"><em>🐶</em>강아지</button>
+    <button class="pick" type="button" data-key="cat"><em>🐱</em>고양이</button>
+    <button class="pick" type="button" data-key="croc"><em>🐊</em>악어</button>
+  </div>
+
+  <button class="btn" type="button" id="go">이리 와! 🏃</button>
   <a class="btn-ghost" href="{{ url_for('logout') }}">로그아웃</a>
 </div>
+
+<script>
+(function () {
+  var CHARS = {
+    dog:  { emoji: '🐶', msg: '멍멍! 보고 싶었어!', dur: 1500, step: '.16s' },
+    cat:  { emoji: '🐱', msg: '냐옹... 왜 불렀냥?', dur: 2100, step: '.26s' },
+    croc: { emoji: '🐊', msg: '쩌억... 배고픈데?', dur: 2900, step: '.36s' }
+  };
+
+  var stage  = document.getElementById('stage');
+  var face   = document.getElementById('face');
+  var bubble = document.getElementById('bubble');
+  var go     = document.getElementById('go');
+  var picks  = document.getElementById('picker').querySelectorAll('.pick');
+  var current = 'dog';
+  var busy = false;
+
+  Array.prototype.forEach.call(picks, function (btn) {
+    btn.addEventListener('click', function () {
+      if (busy) return;
+      Array.prototype.forEach.call(picks, function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      current = btn.getAttribute('data-key');
+      face.textContent = CHARS[current].emoji;
+    });
+  });
+
+  go.addEventListener('click', function () {
+    if (busy) return;
+    busy = true;
+    go.disabled = true;
+
+    var c = CHARS[current];
+    face.textContent = c.emoji;
+    bubble.textContent = c.msg;
+    stage.style.setProperty('--dur', c.dur + 'ms');
+    stage.style.setProperty('--step', c.step);
+
+    stage.classList.remove('running', 'arrived');
+    void stage.offsetWidth;
+    stage.classList.add('running');
+
+    window.setTimeout(function () { stage.classList.add('arrived'); }, c.dur);
+    window.setTimeout(function () {
+      stage.classList.remove('running', 'arrived');
+      go.disabled = false;
+      busy = false;
+    }, c.dur + 1800);
+  });
+})();
+</script>
 {% else %}
 <div class="hero">
-  <span class="eyebrow"><span class="dot"></span> Simple Memo Service</span>
-  <h1>생각을 가볍게,<br>기록은 확실하게.</h1>
-  <p>복잡한 설정 없이 바로 쓰는 메모 서비스.
-     계정을 만들고 로그인하면 준비 끝입니다.</p>
+  <span class="eyebrow"><span class="dot"></span> Run to me</span>
+  <h1>버튼 한 번에,<br>친구가 달려온다.</h1>
+  <div class="hero-pets"><span>🐶</span><span>🐱</span><span>🐊</span></div>
+  <p>강아지, 고양이, 악어 중 하나를 고르고 버튼을 누르면
+     저 멀리서 당신에게 달려옵니다. 로그인하면 바로 시작해요.</p>
   <div class="hero-actions">
     <a class="btn" href="{{ url_for('signup') }}"
        style="display:inline-block;text-decoration:none;">무료로 시작하기</a>
@@ -508,6 +722,12 @@ def signup():
         if not username or not password:
             return render(SIGNUP_BODY, error="아이디와 비밀번호를 모두 입력해주세요.", title="회원가입")
 
+        if len(username) > 20:
+            return render(SIGNUP_BODY, error="아이디는 20자 이하로 입력해주세요.", title="회원가입")
+
+        if len(password) < 6:
+            return render(SIGNUP_BODY, error="비밀번호는 6자 이상이어야 합니다.", title="회원가입")
+
         db = get_db()
         existing = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         if existing:
@@ -548,5 +768,8 @@ def logout():
 
 
 if __name__ == "__main__":
-    init_db()
-    app.run(debug=True)
+    app.run(
+        host="0.0.0.0" if PRODUCTION else "127.0.0.1",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=not PRODUCTION,
+    )
